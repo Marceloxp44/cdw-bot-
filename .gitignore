@@ -6,3 +6,4 @@ auth/
 session/
 sessions/
 *.log
+database/sessao/
