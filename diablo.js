@@ -3469,6 +3469,44 @@ return reply('*❌ ᴇʀʀᴏ ᴀᴏ ʙᴀɪxᴀʀ ᴀ ᴍᴜ́sɪᴄᴀ. sᴇ�
 }
 break
 
+case 'play2':
+case 'p': {
+try {
+if(!q) return reply(`*🎵 | ᴇxᴇᴍᴘʟᴏ: ${prefix + command} nome da música*\n\n> A música será baixada em áudio. Se não baixar, o YouTube pode ter bloqueado o download.`)
+await reply(mess.wait())
+
+const { data } = await axios.get(
+`https://api.bronxyshost.com.br/api-bronxys/pesquisa_ytb?nome=${encodeURIComponent(q)}&apikey=${encodeURIComponent(API_KEY_BRONXYS)}`,
+{ timeout: 60000 }
+)
+
+const item = Array.isArray(data) ? data[0] : null
+if(!item) return reply('*❌ ɴᴇɴʜᴜᴍᴀ ᴍᴜ́sɪᴄᴀ ᴇɴᴄᴏɴᴛʀᴀᴅᴀ. ᴛᴇɴᴛᴇ ᴏᴜᴛʀᴏ ɴᴏᴍᴇ.*')
+
+const partes = String(item.tempo || '').split(':').map(Number)
+let segundos = 0
+if(partes.length === 3) segundos = partes[0] * 3600 + partes[1] * 60 + partes[2]
+else if(partes.length === 2) segundos = partes[0] * 60 + partes[1]
+
+if(segundos > 3600) return reply('*⏰ ᴇsᴛᴇ ᴠɪ́ᴅᴇᴏ ᴇ́ ᴍᴜɪᴛᴏ ɢʀᴀɴᴅᴇ (ᴍᴀɪs ᴅᴇ 1 ʜᴏʀᴀ). ᴇsᴄᴏʟʜᴀ ᴜᴍᴀ ᴍᴜ́sɪᴄᴀ ᴍᴀɪs ᴄᴜʀᴛᴀ.*')
+
+const info_musica = `*🎵 | ᴛɪ́ᴛᴜʟᴏ:* ${item.titulo || 'Não encontrado'}
+
+*📝 | ᴅᴇsᴄʀɪᴄᴀᴏ:* ${item.desc || 'Não encontrado'}
+
+*📺 | ᴄᴀɴᴀʟ:* ${item.canal || 'Não encontrado'}`
+
+if(item.thumb) await imagem(from, item.thumb, info_musica).catch(() => reply(info_musica))
+else await reply(info_musica)
+
+await audio(from, `https://api.bronxyshost.com.br/api-bronxys/play?nome_url=${encodeURIComponent(q)}&apikey=${encodeURIComponent(API_KEY_BRONXYS)}`)
+} catch(e) {
+console.log(e)
+return reply('*❌ ᴇʀʀᴏ ᴀᴏ ʙᴀɪxᴀʀ ᴀ ᴍᴜ́sɪᴄᴀ. sᴇᴊᴀ ᴍᴀɪs ᴇsᴘᴇᴄɪ́ғɪᴄᴏ ᴏᴜ ᴛᴇɴᴛᴇ ᴏᴜᴛʀᴏ ɴᴏᴍᴇ.*')
+}
+}
+break
+
 //=============[ PLAY MP4 / PLAY VIDEO ]=============\\
 
 case 'playmp4':
