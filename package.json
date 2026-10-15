@@ -7,7 +7,7 @@
   "homepage": "nero",
   "license": "MIT",
   "scripts": {
-    "start": "node connect.js"
+    "start": "node updater.js"
   },
   "engines": {
     "node": ">=20.9.0"
