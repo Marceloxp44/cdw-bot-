@@ -1,11 +1,26 @@
 const { execFile } = require('child_process')
-const fs = require('fs'), path = require('path')
+const fs = require('fs'), path = require('path'), axios = require('axios')
+
+const RAIZ = path.join(__dirname, '..', '..')
+const LOCAL = path.join(RAIZ, 'yt-dlp')
+const COOKIES = path.join(RAIZ, 'cookies.txt')
+const URL_YTDLP = process.env.YTDLP_URL || 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux'
 
 // Usa ./yt-dlp na pasta raiz do bot, se existir; senão o yt-dlp global
-const BIN = (() => {
-const local = path.join(__dirname, '..', '..', 'yt-dlp')
-return fs.existsSync(local) ? local : 'yt-dlp'
-})()
+let BIN = fs.existsSync(LOCAL) ? LOCAL : 'yt-dlp'
+
+// Baixa o yt-dlp sozinho (útil em hospedagem sem terminal)
+async function instalar() {
+console.log('[YTDLP] não encontrado/sem permissão. Baixando o yt-dlp automaticamente...')
+const res = await axios.get(URL_YTDLP, { responseType: 'arraybuffer', timeout: 180000, maxRedirects: 5 })
+const buf = Buffer.from(res.data)
+if(buf.length < 1000000) throw new Error('Download do yt-dlp veio incompleto (' + buf.length + ' bytes)')
+try { fs.unlinkSync(LOCAL) } catch {}
+fs.writeFileSync(LOCAL, buf)
+fs.chmodSync(LOCAL, 0o755)
+BIN = LOCAL
+console.log('[YTDLP] instalado em', LOCAL)
+}
 
 const IGNORAR = ['.part', '.ytdl', '.json', '.description', '.jpg', '.jpeg', '.png', '.webp', '.temp']
 
@@ -85,7 +100,9 @@ const tentativas = [
 ['-f', 'bestaudio/worst', '--extract-audio']
 ]
 
-let ultimoErro = null
+if(fs.existsSync(COOKIES)) base.push('--cookies', COOKIES)
+
+let ultimoErro = null, instalou = false
 try {
 for(let i = 0; i < tentativas.length; i++) {
 try {
@@ -101,7 +118,12 @@ return { buffer, ext, mimetype: MIMES[ext] || 'audio/mp4', info: lerInfo(saida) 
 ultimoErro = e
 console.log(`[YTDLP] tentativa ${i + 1} falhou:`, e.message)
 limpar(template)
-if(e.code === 'ENOENT' || e.code === 'LONGO') break
+if(e.code === 'LONGO') break
+if((e.code === 'ENOENT' || e.code === 'EACCES') && !instalou) {
+instalou = true
+try { await instalar(); i--; continue } catch(er) { console.log('[YTDLP] não consegui instalar o yt-dlp:', er.message); break }
+}
+if(e.code === 'ENOENT' || e.code === 'EACCES') break
 await new Promise(r => setTimeout(r, 1500))
 }
 }

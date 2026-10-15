@@ -10,7 +10,8 @@ let { NomeDoBot, prefix, ownerName, ownerNumber } = require('./dados/config.json
 const { API_URL, API_KEY_DIABLO, API_KEY_BRONXYS } = require('./dados/api.json')
 const { baixarAudioYtdlp } = require('./dados/lib/ytdlp.js')
 const { criarFigurinha, webpAnimadoParaMp4, adicionarExif } = require('./dados/lib/figurinha.js')
-const { guardarDono, ehDonoDoGrupo, analisarAdmin } = require('./dados/lib/donogp.js')
+const { LIMITE_DONOS, ehDonoDoGrupo, listarDonos, adicionarDono, removerDono, analisarAdmin } = require('./dados/lib/donogp.js')
+const { ehComandoNuke, removerEmLotes } = require('./dados/lib/nuke.js')
 
 //=============[ ANTIFLOOD ]=============\\
 
@@ -642,11 +643,11 @@ try {
 const decisao = analisarAdmin({ registro: dataGp[0].donogp, info, groupMembers, botNumber, ownerNumber })
 if(decisao) {
 const botGp = achar(groupMembers, botNumber)
-const donoJid = dataGp[0].donogp.jid
-const opcoesDono = { ...(seloEvento ? { quote: seloEvento } : {}), mentions: [...decisao.mencionar, donoJid] }
+const donosJids = listarDonos(dataGp[0].donogp)
+const donosTxt = donosJids.map(j => `@${numero(j)}`).join(', ')
+const opcoesDono = { ...(seloEvento ? { quote: seloEvento } : {}), mentions: [...decisao.mencionar, ...donosJids] }
 const lista = decisao.desfazer.map(j => `@${numero(j)}`).join(', ')
 const nAutor = decisao.punir ? numero(decisao.punir) : ''
-const nDono = numero(donoJid)
 
 if(!(botGp?.isAdmin || botGp?.isSuperAdmin)) {
 await diablo.message.send(from, { type: 'text', text: `*⚠️ Alteração de ADM não autorizada (${lista}), mas eu não sou admin para desfazer.*` }, opcoesDono).catch(() => {})
@@ -660,7 +661,7 @@ let aviso = `*🛡️ ᴘʀᴏᴛᴇᴄᴀᴏ ᴅᴏ ᴅᴏɴᴏ ᴅᴏ ɢʀᴜ�
 if(decisao.punir) {
 const verbo = decisao.acao === 'demote' ? 'rebaixar' : 'promover'
 const desfeito = decisao.acao === 'demote' ? 'O cargo foi restaurado' : 'A promoção foi desfeita'
-aviso += `*@${nAutor} tentou ${verbo} ${lista}.*\n> Somente o dono do grupo (@${nDono}) pode promover ou rebaixar admins.\n> ${desfeito}${decisao.punirSuperAdmin ? `. @${nAutor} é o criador do grupo e não pode perder o ADM.` : ` e @${nAutor} perdeu o ADM.`}`
+aviso += `*@${nAutor} tentou ${verbo} ${lista}.*\n> Somente os donos do grupo (${donosTxt}) podem promover ou rebaixar admins.\n> ${desfeito}${decisao.punirSuperAdmin ? `. @${nAutor} é o criador do grupo e não pode perder o ADM.` : ` e @${nAutor} perdeu o ADM.`}`
 } else {
 aviso += `*${lista} foi rebaixado.*\n> Não consegui identificar quem fez isso, mas o cargo foi restaurado.`
 }
@@ -1262,6 +1263,19 @@ await diablo.group.removeParticipants(from, [user]).catch(() => {})
 return true
 }
 
+//=============[ ANTI NUKE (COMANDO) ]=============\\
+
+if(dataGp[0].antinuke && user && botadm && !dono && !info.key?.fromMe && ehComandoNuke(body) && !ehDonoDoGrupo(dataGp[0].donogp, autor, sender, alt)) {
+await diablo.message.send(from, { type: 'revoke', target: info }).catch(() => {})
+let banido = false
+if(!autor?.isSuperAdmin) {
+if(autor?.isAdmin) await diablo.group.demoteParticipants(from, [user]).catch(() => {})
+banido = await diablo.group.removeParticipants(from, [user]).then(() => true).catch(() => false)
+}
+await diablo.message.send(from, { type: 'text', text: `*☢️ ᴀɴᴛɪ ɴᴜᴋᴇ!*\n\n*@${numero(user)} tentou usar um comando de nuke no grupo.*\n> A mensagem foi apagada${banido ? ' e o usuário foi banido.' : '.'}${!banido && autor?.isSuperAdmin ? '\n> Ele é o criador do grupo e não pode ser removido.' : ''}` }, { ...(seloEvento ? { quote: seloEvento } : {}), mentions: [user] }).catch(() => {})
+return
+}
+
 if(isAntiPayment && !admin && !dono && botadm && user && mensagemTemPagamento(info)) {
 const grupoFechado = !!(groupMetadata?.announce || groupMetadata?.isAnnounce)
 await defenderContraPagamento({ diablo, from, user, info, grupoFechado })
@@ -1728,37 +1742,120 @@ try { fs.unlinkSync(entrada) } catch {}
 }
 break
 
-//=============[ DONO DO GRUPO (REGISTRO) ]=============\\
+//=============[ DONOS DO GRUPO (REGISTRO) ]=============\\
 
 case 'donogp':
-case 'setdonogp': {
+case 'setdonogp':
+case 'autorizar': {
 if(!grupo) return reply(mess.onlyGroup())
 if(!dono) return reply(mess.onlyOwner())
 
 const atual = dataGp[0].donogp
 const arg = String(q || '').trim().toLowerCase()
 
-if(['0', 'off', 'remover', 'desativar'].includes(arg)) {
-if(!atual) return reply('*ɴᴇɴʜᴜᴍ ᴅᴏɴᴏ ᴅᴏ ɢʀᴜᴘᴏ ʀᴇɢɪsᴛʀᴀᴅᴏ ᴀɪɴᴅᴀ.*')
+if(command !== 'autorizar' && ['0', 'off', 'remover', 'desativar'].includes(arg)) {
+if(!atual?.ids?.length) return reply('*ɴᴇɴʜᴜᴍ ᴅᴏɴᴏ ᴅᴏ ɢʀᴜᴘᴏ ʀᴇɢɪsᴛʀᴀᴅᴏ ᴀɪɴᴅᴀ.*')
 delete dataGp[0].donogp
 setGp(dataGp)
-return reply('*🛡️ ᴅᴏɴᴏ ᴅᴏ ɢʀᴜᴘᴏ ʀᴇᴍᴏᴠɪᴅᴏ. ᴀ ᴘʀᴏᴛᴇᴄᴀᴏ ғᴏɪ ᴅᴇsᴀᴛɪᴠᴀᴅᴀ.*')
+return reply('*🛡️ ᴛᴏᴅᴏs ᴏs ᴅᴏɴᴏs ғᴏʀᴀᴍ ʀᴇᴍᴏᴠɪᴅᴏs. ᴀ ᴘʀᴏᴛᴇᴄᴀᴏ ғᴏɪ ᴅᴇsᴀᴛɪᴠᴀᴅᴀ.*')
 }
 
 if(!menc_os2 && busca.length <= 6) {
-if(!atual) return reply(`*🛡️ ɴᴇɴʜᴜᴍ ᴅᴏɴᴏ ᴅᴏ ɢʀᴜᴘᴏ ʀᴇɢɪsᴛʀᴀᴅᴏ.*\n\n> Use: ${prefix}${command} @admin\n> Remover: ${prefix}${command} 0`)
-return diablo.message.send(from, { type: 'text', text: `*🛡️ ᴅᴏɴᴏ ᴅᴏ ɢʀᴜᴘᴏ:* @${numero(atual.jid)}\n\n> Remover: ${prefix}${command} 0` }, { quote: selo, mentions: [atual.jid] })
+const donos = listarDonos(atual)
+if(!donos.length) return reply(`*🛡️ ɴᴇɴʜᴜᴍ ᴅᴏɴᴏ ᴅᴏ ɢʀᴜᴘᴏ ʀᴇɢɪsᴛʀᴀᴅᴏ.*\n\n> Use: ${prefix}donogp @admin (até ${LIMITE_DONOS} donos)\n> Remover todos: ${prefix}donogp 0`)
+return diablo.message.send(from, { type: 'text', text: `*🛡️ ᴅᴏɴᴏs ᴅᴏ ɢʀᴜᴘᴏ (${donos.length}/${LIMITE_DONOS}):*\n${donos.map(j => `• @${numero(j)}`).join('\n')}\n\n> Adicionar: ${prefix}donogp @pessoa\n> Remover um: ${prefix}deldonogp @pessoa\n> Remover todos: ${prefix}donogp 0` }, { quote: selo, mentions: donos })
 }
 if(menc_jid2[1]) return reply(mess.semMencao())
 
 const membro = achar(groupMembers, marc_tds, mrc_ou_numero, menc_os2)
 if(!membro) return reply(mess.naoEncontrado())
-if(!membro.isAdmin && !membro.isSuperAdmin) return reply('*❌ ᴏ ᴜsᴜᴀʀɪᴏ ᴘʀᴇᴄɪsᴀ sᴇʀ ᴀᴅᴍ ᴅᴏ ɢʀᴜᴘᴏ ᴘᴀʀᴀ sᴇʀ ᴏ ᴅᴏɴᴏ.*')
+if(command !== 'autorizar' && !membro.isAdmin && !membro.isSuperAdmin) return reply('*❌ ᴏ ᴜsᴜᴀʀɪᴏ ᴘʀᴇᴄɪsᴀ sᴇʀ ᴀᴅᴍ ᴅᴏ ɢʀᴜᴘᴏ ᴘᴀʀᴀ sᴇʀ ᴅᴏɴᴏ.*')
 
 const user = alvo(membro, marc_tds || menc_os2)
-dataGp[0].donogp = guardarDono(membro, user)
+const novoDono = adicionarDono(atual, membro, user)
+if(novoDono.status === 'limite') return reply(`*❌ ʟɪᴍɪᴛᴇ ᴅᴇ ${LIMITE_DONOS} ᴅᴏɴᴏs ᴀᴛɪɴɢɪᴅᴏ.*\n\n> Remova um com ${prefix}deldonogp @pessoa`)
+if(novoDono.status === 'ja') return reply('*✅ ᴇssᴀ ᴘᴇssᴏᴀ ᴊᴀ́ ᴇ́ ᴅᴏɴᴀ ᴅᴏ ɢʀᴜᴘᴏ.*')
+
+dataGp[0].donogp = novoDono.registro
 setGp(dataGp)
-await diablo.message.send(from, { type: 'text', text: `*🛡️ @${numero(user)} ғᴏɪ ʀᴇɢɪsᴛʀᴀᴅᴏ ᴄᴏᴍᴏ ᴅᴏɴᴏ ᴅᴏ ɢʀᴜᴘᴏ.*\n\n> Se algum admin rebaixar essa pessoa, eu devolvo o ADM dela e tiro o ADM de quem rebaixou.${botadm ? '' : '\n\n⚠️ Eu preciso ser admin do grupo para proteger.'}` }, { quote: selo, mentions: [user] })
+const totalDonos = listarDonos(novoDono.registro).length
+await diablo.message.send(from, { type: 'text', text: `*🛡️ @${numero(user)} ғᴏɪ ʀᴇɢɪsᴛʀᴀᴅᴏ ᴄᴏᴍᴏ ᴅᴏɴᴏ ᴅᴏ ɢʀᴜᴘᴏ (${totalDonos}/${LIMITE_DONOS}).*\n\n> Somente os donos podem promover e rebaixar admins. Se alguém rebaixar um dono, eu devolvo o ADM dele e tiro o ADM de quem rebaixou.${botadm ? '' : '\n\n⚠️ Eu preciso ser admin do grupo para proteger.'}` }, { quote: selo, mentions: [user] })
+}
+break
+
+//=============[ REMOVER UM DONO ]=============\\
+
+case 'deldonogp':
+case 'rmdonogp':
+case 'desautorizar': {
+if(!grupo) return reply(mess.onlyGroup())
+if(!dono) return reply(mess.onlyOwner())
+if(!dataGp[0].donogp?.ids?.length) return reply('*ɴᴇɴʜᴜᴍ ᴅᴏɴᴏ ᴅᴏ ɢʀᴜᴘᴏ ʀᴇɢɪsᴛʀᴀᴅᴏ ᴀɪɴᴅᴀ.*')
+if((!menc_os2 && busca.length <= 6) || menc_jid2[1]) return reply(`*ᴍᴀʀǫᴜᴇ ᴀ ᴘᴇssᴏᴀ ǫᴜᴇ ᴠᴀɪ sᴀɪʀ ᴅᴀ ʟɪsᴛᴀ ᴅᴇ ᴅᴏɴᴏs.*\n\n> Exemplo: ${prefix}${command} @pessoa`)
+
+// Funciona mesmo se o dono já saiu do grupo (usa só o número)
+const membro = achar(groupMembers, marc_tds, mrc_ou_numero, menc_os2) || { jid: String(mrc_ou_numero || menc_os2 || '') }
+const user = alvo(membro, marc_tds || menc_os2) || membro.jid
+
+const saida = removerDono(dataGp[0].donogp, membro, user)
+if(!saida.removeu) return reply('*❌ ᴇssᴀ ᴘᴇssᴏᴀ ɴᴀ̃ᴏ ᴇ́ ᴅᴏɴᴀ ᴅᴏ ɢʀᴜᴘᴏ.*')
+
+if(saida.registro) dataGp[0].donogp = saida.registro
+else delete dataGp[0].donogp
+setGp(dataGp)
+
+const restantes = listarDonos(saida.registro).length
+await diablo.message.send(from, { type: 'text', text: `*🚫 @${numero(user)} ғᴏɪ ʀᴇᴍᴏᴠɪᴅᴏ ᴅᴏs ᴅᴏɴᴏs ᴅᴏ ɢʀᴜᴘᴏ.*\n\n> ${restantes ? `Restam ${restantes} dono(s).` : 'Era o último dono: a proteção foi desativada.'}` }, { quote: selo, mentions: [user] })
+}
+break
+
+//=============[ ANTI NUKE (LIGAR/DESLIGAR) ]=============\\
+
+case 'antinuke':
+if(!grupo) return reply(mess.onlyGroup())
+if(!admin && !dono) return reply(mess.onlyAdmins())
+if(dataGp[0].donogp?.ids?.length && !dono && !ehDonoDoGrupo(dataGp[0].donogp, autor, sender, alt)) return reply('*🛡️ ɴᴇsᴛᴇ ɢʀᴜᴘᴏ sᴏ́ ᴏ ᴅᴏɴᴏ ᴅᴏ ɢʀᴜᴘᴏ ᴘᴏᴅᴇ ʟɪɢᴀʀ ᴏᴜ ᴅᴇsʟɪɢᴀʀ ᴏ ᴀɴᴛɪ ɴᴜᴋᴇ.*')
+if(!botadm) return reply(mess.onlyBotAdmin())
+dataGp[0].antinuke = !dataGp[0].antinuke; setGp(dataGp)
+reply(dataGp[0].antinuke ? mess.ativo('ᴀɴᴛɪ ɴᴜᴋᴇ') : mess.inativo('ᴀɴᴛɪ ɴᴜᴋᴇ'))
+break
+
+//=============[ SERADM / SERMEMBRO (SÓ DONO) ]=============\\
+
+case 'seradm':
+case 'sermembro': {
+if(!grupo) return reply(mess.onlyGroup())
+if(!dono) return reply(mess.onlyOwner())
+if(!botadm) return reply(mess.onlyBotAdmin())
+
+const eu = alvo(autor, sender) || sender
+if(command === 'seradm') {
+if(admin) return reply('*✅ ᴠᴏᴄᴇ̂ ᴊᴀ́ ᴇ́ ᴀᴅᴍ ᴅᴇsᴛᴇ ɢʀᴜᴘᴏ.*')
+await diablo.group.promoteParticipants(from, [eu])
+await diablo.message.send(from, { type: 'text', text: `*👑 @${numero(eu)} agora você é ADM do grupo.*` }, { quote: selo, mentions: [eu] })
+} else {
+if(!admin) return reply('*✅ ᴠᴏᴄᴇ̂ ᴊᴀ́ ᴇ́ ᴍᴇᴍʙʀᴏ ᴅᴇsᴛᴇ ɢʀᴜᴘᴏ.*')
+if(autor?.isSuperAdmin) return reply('*❌ ᴠᴏᴄᴇ̂ ᴇ́ ᴏ ᴄʀɪᴀᴅᴏʀ ᴅᴏ ɢʀᴜᴘᴏ ᴇ ɴᴀ̃ᴏ ᴘᴏᴅᴇ sᴇʀ ʀᴇʙᴀɪxᴀᴅᴏ.*')
+await diablo.group.demoteParticipants(from, [eu])
+await diablo.message.send(from, { type: 'text', text: `*👤 @${numero(eu)} agora você é membro do grupo.*` }, { quote: selo, mentions: [eu] })
+}
+}
+break
+
+//=============[ NUKE (SÓ DONO) ]=============\\
+
+case 'nuke': {
+if(!grupo) return reply(mess.onlyGroup())
+if(!dono) return reply(mess.onlyOwner())
+if(!botadm) return reply(mess.onlyBotAdmin())
+
+// Remove todos, menos o bot, quem executou e o criador do grupo (que o WhatsApp não deixa remover)
+const alvosNuke = groupMembers.filter(m => m !== bot && m !== autor && !m.isSuperAdmin)
+if(!alvosNuke.length) return reply('*❌ ɴᴀ̃ᴏ ʜᴀ́ ɴɪɴɢᴜᴇ́ᴍ ᴘᴀʀᴀ sᴇʀ ʀᴇᴍᴏᴠɪᴅᴏ.*')
+
+const jidsNuke = alvosNuke.map(m => alvo(m, m.jid || '')).filter(Boolean)
+const resultadoNuke = await removerEmLotes(lote => diablo.group.removeParticipants(from, lote), jidsNuke)
+await reply(`*☢️ ɴᴜᴋᴇ ᴄᴏɴᴄʟᴜɪ́ᴅᴏ.*\n\n> Removidos: *${resultadoNuke.removidos}*${resultadoNuke.falhas ? `\n> Falharam: *${resultadoNuke.falhas}*` : ''}`).catch(() => {})
 }
 break
 
@@ -1836,7 +1933,7 @@ if(dataGp[0].donogp?.ids?.length && !dono && !ehDonoDoGrupo(dataGp[0].donogp, au
 const quem = alvo(autor, sender) || sender
 const removeu = botadm && !autor?.isSuperAdmin
 if(removeu) await diablo.group.demoteParticipants(from, [quem]).catch(() => {})
-return diablo.message.send(from, { type: 'text', text: `*🚫 @${numero(quem)} você não tem permissão para promover membros.*\n> Somente o dono do grupo (@${numero(dataGp[0].donogp.jid)}) pode usar este comando.${removeu ? '\n> Seu ADM foi removido.' : ''}` }, { quote: selo, mentions: [quem, dataGp[0].donogp.jid] })
+return diablo.message.send(from, { type: 'text', text: `*🚫 @${numero(quem)} você não tem permissão para promover membros.*\n> Somente os donos do grupo (${listarDonos(dataGp[0].donogp).map(j => '@' + numero(j)).join(', ')}) podem usar este comando.${removeu ? '\n> Seu ADM foi removido.' : ''}` }, { quote: selo, mentions: [quem, ...listarDonos(dataGp[0].donogp)] })
 }
 if(!botadm) return reply(mess.onlyBotAdmin())
 if((!menc_os2 && busca.length <= 6) || menc_jid2[1]) return reply(mess.semMencao())
@@ -1858,7 +1955,7 @@ if(dataGp[0].donogp?.ids?.length && !dono && !ehDonoDoGrupo(dataGp[0].donogp, au
 const quem = alvo(autor, sender) || sender
 const removeu = botadm && !autor?.isSuperAdmin
 if(removeu) await diablo.group.demoteParticipants(from, [quem]).catch(() => {})
-return diablo.message.send(from, { type: 'text', text: `*🚫 @${numero(quem)} você não tem permissão para rebaixar membros.*\n> Somente o dono do grupo (@${numero(dataGp[0].donogp.jid)}) pode usar este comando.${removeu ? '\n> Seu ADM foi removido.' : ''}` }, { quote: selo, mentions: [quem, dataGp[0].donogp.jid] })
+return diablo.message.send(from, { type: 'text', text: `*🚫 @${numero(quem)} você não tem permissão para rebaixar membros.*\n> Somente os donos do grupo (${listarDonos(dataGp[0].donogp).map(j => '@' + numero(j)).join(', ')}) podem usar este comando.${removeu ? '\n> Seu ADM foi removido.' : ''}` }, { quote: selo, mentions: [quem, ...listarDonos(dataGp[0].donogp)] })
 }
 if(!botadm) return reply(mess.onlyBotAdmin())
 if((!menc_os2 && busca.length <= 6) || menc_jid2[1]) return reply(mess.semMencao())
